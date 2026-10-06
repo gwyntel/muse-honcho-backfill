@@ -1,0 +1,14 @@
+Conversation with Muse AI
+
+[2026-10-01 12:00:00] Muse AI: Hey! I'm your personal agent.
+[2026-10-01 12:00:05] You: hello! can you help me plan a trip?
+[2026-10-01 12:00:09] Muse AI: Of course — where to?
+
+Here are some ideas:
+- the coast
+- the mountains
+
+[[hatch_widget:widget-12345678-1234-1234-1234-123456789abc]]
+[2026-10-01 12:01:30] You: the coast sounds nice
+definitely
+[2026-10-01 12:02:00] Muse AI:
