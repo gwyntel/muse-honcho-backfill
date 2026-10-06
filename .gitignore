@@ -1,0 +1,17 @@
+# Your Muse export data and load state never belong in git. Ever.
+data/
+*.zip
+*.jsonl
+state.json
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# editors
+.DS_Store
+.idea/
+.vscode/
