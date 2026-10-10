@@ -30,13 +30,30 @@ WIDGET_RE = re.compile(r"\[\[hatch_widget:[^\]]+\]\]")
 
 SPEAKER_PEER = {"You": "user", "Muse AI": "assistant"}
 
+# Side-chat heart markers (Gwyneth's rule, 2026-10-10): every assistant reply
+# in a side chat ends with "[<heart>] [side]" on its own final line.
+# No pink hearts, per her. Maps heart -> color name for session ids.
+HEARTS = {
+    "❤️": "red", "🧡": "orange", "💛": "yellow",
+    "💚": "green", "💙": "blue", "💜": "purple",
+    "🖤": "black", "🤍": "white", "🩶": "grey",
+}
+VS16 = "\uFE0F"
+MARKER_RE = re.compile(
+    r"\[(" + "[" + "".join(re.escape(h.replace(VS16, "")) for h in HEARTS)
+    + r"])" + VS16 + r"?\] \[side\]\s*$"
+)
+# normalize away U+FE0F variation selectors for lookup
+HEART_LOOKUP = {h.replace(VS16, ""): name for h, name in HEARTS.items()}
+
 
 @dataclass
 class Message:
     ts: datetime            # tz-aware UTC
     speaker: str            # "user" | "assistant"
     raw_speaker: str        # "You" | "Muse AI"
-    text: str               # cleaned content
+    text: str               # cleaned content (marker stripped)
+    heart: str | None = None  # side-chat heart color name, assistant msgs only
 
     @property
     def msg_id(self) -> str:
@@ -77,8 +94,15 @@ def parse_conversation_text(text: str, name: str, source_file: str) -> Conversat
         if cur_ts is None:
             return
         cleaned = clean_text("\n".join(buf))
+        heart = None
+        if cur_speaker == "assistant":
+            mkr = MARKER_RE.search(cleaned)
+            if mkr:
+                heart = HEART_LOOKUP.get(mkr.group(1).replace(VS16, ""))
+                cleaned = MARKER_RE.sub("", cleaned).rstrip()
         conv.messages.append(Message(ts=cur_ts, speaker=cur_speaker,
-                                     raw_speaker=cur_raw, text=cleaned))
+                                     raw_speaker=cur_raw, text=cleaned,
+                                     heart=heart))
         buf.clear()
 
     for line in text.split("\n"):
@@ -105,21 +129,61 @@ def conversation_name_from_filename(filename: str) -> str:
 
 
 def chunk_by_gap(messages: list[Message], gap_hours: float = 4.0) -> list[list[Message]]:
-    """Split a chronological message list into episodes: a gap of >= gap_hours
-    between consecutive messages starts a new chunk. The export does not
-    delineate side chats from the main chat, so this is a heuristic —
-    a side chat opened mid-flow lands in the surrounding episode.
+    """Legacy: split on time gaps only. Prefer build_episodes()."""
+    return [ep["messages"] for ep in build_episodes(messages, gap_hours)]
+
+
+def build_episodes(messages: list[Message],
+                   gap_hours: float = 4.0) -> list[dict]:
+    """Group a chronological message list into episodes.
+
+    Attribution: assistant messages carry their side-chat heart (or None
+    for main). Each user message is attributed to the heart of the NEXT
+    assistant message (the reply reveals which chat it was in), falling
+    back to the previous assistant message, else None.
+
+    A new episode starts when the gap between consecutive messages >=
+    gap_hours, or when the attributed heart changes (None <-> H, H1 <-> H2).
+    So a side chat opened mid-flow still gets its own session.
+
+    Known ambiguity: back-to-back user messages from different chats with
+    no reply between them (e.g. main-u, side-u, side-a[H]) attribute the
+    earlier one to the later chat. Rare; accepted.
+
+    Returns [{"heart": "green"|None, "messages": [...]}].
     """
     from datetime import timedelta
     gap = timedelta(hours=gap_hours)
-    chunks: list[list[Message]] = []
-    for m in messages:
-        if chunks and (m.ts - chunks[-1][-1].ts) >= gap:
-            chunks.append([])
-        elif not chunks:
-            chunks.append([])
-        chunks[-1].append(m)
-    return chunks
+
+    hearts: list[str | None] = []
+    _MISSING = object()  # distinct from None (an unmarked assistant reply)
+    for i, m in enumerate(messages):
+        if m.speaker == "assistant":
+            hearts.append(m.heart)
+            continue
+        h: str | None | object = _MISSING
+        for j in range(i + 1, len(messages)):
+            if messages[j].speaker == "assistant":
+                h = messages[j].heart
+                break
+        if h is _MISSING:
+            h = None
+            for j in range(i - 1, -1, -1):
+                if messages[j].speaker == "assistant":
+                    h = messages[j].heart
+                    break
+        hearts.append(h)  # type: ignore[arg-type]
+
+    episodes: list[dict] = []
+    for m, h in zip(messages, hearts):
+        if not episodes:
+            episodes.append({"heart": h, "messages": []})
+        else:
+            prev = episodes[-1]["messages"][-1]
+            if (m.ts - prev.ts) >= gap or h != episodes[-1]["heart"]:
+                episodes.append({"heart": h, "messages": []})
+        episodes[-1]["messages"].append(m)
+    return [ep for ep in episodes if ep["messages"]]
 
 
 def parse_export_zip(zip_path: str | Path) -> list[Conversation]:

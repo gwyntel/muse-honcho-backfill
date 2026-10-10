@@ -54,8 +54,50 @@ def test_conversation_name():
     ) == "Conversation with Muse AI"
 
 
+SIDECHAT_TXT = """Conversation with Muse AI
+
+[2026-10-10 12:00:00] You: main chat topic here
+[2026-10-10 12:01:00] Muse AI: main chat reply
+[2026-10-10 12:05:00] You: this is a side chat opener
+[2026-10-10 12:05:30] Muse AI: side chat reply one
+[💚] [side]
+[2026-10-10 12:06:00] You: side chat followup
+[2026-10-10 12:06:30] Muse AI: side chat reply two
+[💚] [side]
+[2026-10-10 12:07:00] You: back to main chat
+[2026-10-10 12:07:30] Muse AI: main chat reply two
+"""
+
+
+def test_marker_extraction():
+    from muse_export.parse import build_episodes
+    conv = parse_conversation_text(SIDECHAT_TXT, name="t", source_file="t")
+    assert len(conv.messages) == 8
+    hearts = [m.heart for m in conv.messages]
+    assert hearts == [None, None, None, "green", None, "green", None, None]
+    # marker stripped from loaded text
+    assert "[side]" not in conv.messages[3].text
+    assert conv.messages[3].text == "side chat reply one"
+
+
+def test_heart_episodes_and_pullback():
+    from muse_export.parse import build_episodes
+    conv = parse_conversation_text(SIDECHAT_TXT, name="t", source_file="t")
+    eps = build_episodes(conv.messages, gap_hours=4.0)
+    assert len(eps) == 3, [(e["heart"], len(e["messages"])) for e in eps]
+    assert eps[0]["heart"] is None
+    assert eps[1]["heart"] == "green"
+    assert eps[2]["heart"] is None
+    # pull-back: the side chat opener (unmarked user msg) joins the green episode
+    green_texts = [m.text for m in eps[1]["messages"]]
+    assert green_texts[0] == "this is a side chat opener"
+    assert len(eps[1]["messages"]) == 4  # opener + 3 marked-flow messages
+
+
 if __name__ == "__main__":
     test_parse_fixture()
     test_clean_text()
     test_conversation_name()
+    test_marker_extraction()
+    test_heart_episodes_and_pullback()
     print("all parser tests passed")

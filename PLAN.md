@@ -27,11 +27,13 @@
 - Message content cap: **25,000 chars** (loader truncates at 24k + `truncated` metadata flag).
 - Peer ids are free-form (`gwyneth`, `muse` need no encoding).
 
-## Session layout (updated 2026-10-10: episode chunking)
+## Session layout (updated 2026-10-10: heart markers + episode chunking)
 
 - The export does **not** delineate side chats from the main chat. Verified 2026-10-10 against a planted side-chat test: the transcript concatenates everything chronologically with no header/separator; `manifest.json`'s `turns[]` marks every turn `channels: ["main"]`; `turn_id` prefixes are role-based only (`assistant-msg-` vs bare UUID). No signal distinguishes side chats.
-- So: each conversation is split into **episodes** — a gap of ≥4h (`--gap-hours`, tunable) between consecutive messages starts a new session. Session id: `muse-<conv-slug>-<yyyymmdd>-<hhmm>` of the episode's first message (deterministic → idempotent weekly re-runs). Real data: 2,148 messages → 31 episodes over 18 days.
-- Known limitation (demonstrated by the planted test): a side chat opened within 4h of main-chat activity lands in the surrounding episode. Content is complete and ordered; boundaries are heuristic.
+- So Gwyneth instituted **heart markers** (2026-10-10): every assistant reply in a side chat ends with `[<heart>] [side]` on its own final line, where heart is a per-chat color (any except pink — 9 available). A local registry (`data/sidechat_hearts.json`, gitignored) locks hearts to chats; new chats get the least-recently-used free heart. The parser strips the marker, records the heart, and starts a new episode on heart changes — so a side chat opened mid-flow gets its own session.
+- User messages are attributed to the next assistant reply's heart (the reply reveals which chat it was in), falling back to the previous reply. A time gap ≥4h (`--gap-hours`) also starts a new episode.
+- Session id: `muse-<conv-slug>-side-<color>-<yyyymmdd>-<hhmm>` (heart) or `muse-<conv-slug>-<yyyymmdd>-<hhmm>` (main). Deterministic → idempotent weekly re-runs.
+- Known limitation: back-to-back user messages from different chats with no reply between them misattribute the earlier one (rare).
 - Scopes: `["muse-export"]`.
 - Session metadata: `{source: muse-export, conversation, source_file, chunk_start, chunk_end}`.
 - Message metadata: `{source: muse-export, raw_speaker, truncated, empty_in_export}`.

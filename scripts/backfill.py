@@ -5,12 +5,14 @@ Usage:
     python scripts/backfill.py data/incoming/'EYI Package_10-06-2026_1791319307.zip'
     python scripts/backfill.py /path/to/export_dir   # unzipped export also works
 
-The export does not delineate side chats from the main chat (verified: the
-transcript concatenates everything chronologically, and the manifest marks
-every turn channels=["main"]). So each conversation is split into episodes:
-a gap of >= --gap-hours (default 4) between consecutive messages starts a new
-Honcho session. A side chat opened mid-flow lands in the surrounding episode —
-that's a known limitation of the heuristic, not a bug.
+The export does not delineate side chats from the main chat on its own, so
+two signals combine: side-chat heart markers and time gaps. Every assistant
+reply in a side chat ends with "[<heart>] [side]" (Gwyneth's rule); the
+parser reads the heart and starts a new episode on heart changes, so a side
+chat opened mid-flow still gets its own session. A gap of >= --gap-hours
+(default 4) between consecutive messages also starts a new episode.
+Unmarked side-chat openers (the user's first message before any marked
+reply) are pulled into the side-chat episode.
 
 Messages load oldest-first in batches of 100 with original UTC timestamps
 (true backdating). Re-running only appends new messages — a state file
@@ -31,7 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from muse_export.honcho import Honcho, truncate
-from muse_export.parse import chunk_by_gap, parse_export_zip
+from muse_export.parse import build_episodes, parse_export_zip
 
 SESSION_SCOPES = ["muse-export"]
 EMPTY_PLACEHOLDER = "[no message text in export]"
@@ -42,8 +44,18 @@ def slugify(name: str) -> str:
     return f"muse-{slug}" or "muse-chat"
 
 
-def chunk_session_id(conv_slug: str, chunk: list) -> str:
-    return f"{conv_slug}-{chunk[0].ts.strftime('%Y%m%d-%H%M')}"
+def episode_session_id(conv_slug: str, ep: dict) -> str:
+    start = ep["messages"][0].ts.strftime("%Y%m%d-%H%M")
+    if ep["heart"]:
+        return f"{conv_slug}-side-{ep['heart']}-{start}"
+    return f"{conv_slug}-{start}"
+
+
+def episode_label(ep: dict) -> str:
+    msgs = ep["messages"]
+    heart = f"[{ep['heart']}] " if ep["heart"] else ""
+    return (f"{heart}{len(msgs)} msgs, "
+            f"{msgs[0].ts.isoformat()} -> {msgs[-1].ts.isoformat()}")
 
 
 def load_state(path: Path) -> dict:
@@ -57,9 +69,10 @@ def save_state(path: Path, state: dict) -> None:
     path.write_text(json.dumps(state, indent=2))
 
 
-def load_chunk(client: Honcho, session_id: str, chunk: list, conv,
-               user_peer: str, agent_peer: str, seen: set[str]) -> list[str]:
-    new_msgs = [m for m in chunk if m.msg_id not in seen]
+def load_episode(client: Honcho, session_id: str, ep: dict, conv,
+                user_peer: str, agent_peer: str, seen: set[str]) -> list[str]:
+    msgs = ep["messages"]
+    new_msgs = [m for m in msgs if m.msg_id not in seen]
     if not new_msgs:
         return []
     client.ensure_session(
@@ -67,8 +80,10 @@ def load_chunk(client: Honcho, session_id: str, chunk: list, conv,
         metadata={"source": "muse-export",
                   "conversation": conv.name,
                   "source_file": conv.source_file,
-                  "chunk_start": chunk[0].ts.isoformat(),
-                  "chunk_end": chunk[-1].ts.isoformat()},
+                  "chunk_start": msgs[0].ts.isoformat(),
+                  "chunk_end": msgs[-1].ts.isoformat(),
+                  "heart": ep["heart"],
+                  "side_chat": ep["heart"] is not None},
         scopes=SESSION_SCOPES,
     )
     client.add_peers(session_id, [user_peer, agent_peer])
@@ -88,6 +103,7 @@ def load_chunk(client: Honcho, session_id: str, chunk: list, conv,
                 "raw_speaker": m.raw_speaker,
                 "truncated": was_truncated,
                 "empty_in_export": was_empty,
+                "heart": m.heart,
             },
         })
         loaded.append(m.msg_id)
@@ -123,9 +139,8 @@ def main() -> int:
     if args.dry_run:
         for c in convs:
             conv_slug = slugify(c.name)
-            for chunk in chunk_by_gap(c.messages, args.gap_hours):
-                print(f"  {chunk_session_id(conv_slug, chunk)}: {len(chunk)} msgs, "
-                      f"{chunk[0].ts.isoformat()} -> {chunk[-1].ts.isoformat()}")
+            for ep in build_episodes(c.messages, args.gap_hours):
+                print(f"  {episode_session_id(conv_slug, ep)}: {episode_label(ep)}")
         return 0
 
     state = load_state(Path(args.state))
@@ -135,17 +150,19 @@ def main() -> int:
 
     for conv in convs:
         conv_slug = slugify(conv.name)
-        for chunk in chunk_by_gap(conv.messages, args.gap_hours):
-            session_id = chunk_session_id(conv_slug, chunk)
+        for ep in build_episodes(conv.messages, args.gap_hours):
+            session_id = episode_session_id(conv_slug, ep)
             seen = set(state.get(session_id, {}).get("loaded", []))
-            loaded = load_chunk(client, session_id, chunk, conv,
-                                args.user_peer, args.agent_peer, seen)
+            loaded = load_episode(client, session_id, ep, conv,
+                                  args.user_peer, args.agent_peer, seen)
             if not loaded and seen:
                 print(f"{session_id}: up to date ({len(seen)} loaded)")
                 continue
+            msgs = ep["messages"]
             state[session_id] = {
                 "conversation": conv.name,
-                "chunk_start": chunk[0].ts.isoformat(),
+                "chunk_start": msgs[0].ts.isoformat(),
+                "heart": ep["heart"],
                 "loaded": sorted(seen | set(loaded)),
             }
             save_state(Path(args.state), state)
