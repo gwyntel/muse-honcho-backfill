@@ -27,12 +27,14 @@
 - Message content cap: **25,000 chars** (loader truncates at 24k + `truncated` metadata flag).
 - Peer ids are free-form (`gwyneth`, `muse` need no encoding).
 
-## Session layout
+## Session layout (updated 2026-10-10: episode chunking)
 
-- Session id: `muse-<slug(conversation name)>` (stable across weekly runs → appends land in the same session).
+- The export does **not** delineate side chats from the main chat. Verified 2026-10-10 against a planted side-chat test: the transcript concatenates everything chronologically with no header/separator; `manifest.json`'s `turns[]` marks every turn `channels: ["main"]`; `turn_id` prefixes are role-based only (`assistant-msg-` vs bare UUID). No signal distinguishes side chats.
+- So: each conversation is split into **episodes** — a gap of ≥4h (`--gap-hours`, tunable) between consecutive messages starts a new session. Session id: `muse-<conv-slug>-<yyyymmdd>-<hhmm>` of the episode's first message (deterministic → idempotent weekly re-runs). Real data: 2,148 messages → 31 episodes over 18 days.
+- Known limitation (demonstrated by the planted test): a side chat opened within 4h of main-chat activity lands in the surrounding episode. Content is complete and ordered; boundaries are heuristic.
 - Scopes: `["muse-export"]`.
-- Session metadata: `{source: muse-export, conversation, source_file}`.
-- Message metadata: `{source: muse-export, raw_speaker, truncated}`.
+- Session metadata: `{source: muse-export, conversation, source_file, chunk_start, chunk_end}`.
+- Message metadata: `{source: muse-export, raw_speaker, truncated, empty_in_export}`.
 
 ## Idempotency
 
