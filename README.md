@@ -8,9 +8,9 @@ Muse is great in the moment, but its memory lives in per-chat context. Honcho is
 
 ## How it works
 
-1. **Export** (weekly): Muse app → Settings → Data Controls → "Download your agent data". You get a zip (`EYI Package_<date>_<id>.zip`) containing one `.txt` transcript per conversation plus your workspace files.
-2. **Run**: `python scripts/backfill.py path/to/EYI\ Package_....zip`
-3. The loader parses each transcript into messages, creates one Honcho session per conversation, and loads messages oldest-first in batches of 100 — each with its original UTC timestamp (`created_at`), so history lands backdated, not "everything happened today".
+1. **Export** (weekly): Muse app → Settings → Data Controls → "Download your agent data". You get a zip (or folder) containing one `.txt` transcript per conversation plus your workspace files.
+2. **Run**: `python scripts/backfill.py path/to/export`
+3. The loader parses each transcript into messages, splits it into **episodes** (a gap of 4+ hours between messages starts a new episode — see "Sessions" below), and loads messages oldest-first in batches of 100 — each with its original UTC timestamp (`created_at`), so history lands backdated, not "everything happened today".
 4. Re-running is safe: a state file records every loaded message hash, so weekly uploads only append what's new. Zero duplicates.
 
 ## Setup
@@ -31,9 +31,10 @@ export HONCHO_HTTP_PROXY="http://proxy:3128" HONCHO_HTTPS_PROXY="http://proxy:31
 
 ## What lands in Honcho
 
-- **Sessions**: one per exported conversation (`muse-conversation-with-muse-ai`, …), tagged with the `muse-export` scope, metadata carries the conversation title and source file.
+- **Sessions**: the export does **not** delineate side chats from the main chat (verified: one transcript, everything chronological, manifest marks every turn `channels=["main"]`). So each conversation is split into **episodes** — a gap of ≥4 hours (tunable via `--gap-hours`) between consecutive messages starts a new session, named `muse-<slug>-<yyyymmdd>-<hhmm>` of the episode's first message. Every session is tagged with the `muse-export` scope; metadata carries conversation title, source file, and episode start/end.
+  - Known limitation: a side chat opened mid-flow (no 4h gap) lands in the surrounding episode. The content is all there, in order — the boundary is just heuristic.
 - **Peers**: your user peer + agent peer (defaults `gwyneth`/`muse` — override with `--user-peer` / `--agent-peer`), both added to every session.
-- **Messages**: `You` → user peer, `Muse AI` → agent peer. Chat-widget placeholders (`[[hatch_widget:…]]`) are stripped; messages over the 25k-char Honcho cap are truncated with a note in metadata.
+- **Messages**: `You` → user peer, `Muse AI` → agent peer. Chat-widget placeholders (`[[hatch_widget:…]]`) are stripped; empty turns (tool/background activity with no chat text — about half of all turns) load as `[no message text in export]` placeholders so the true turn order survives; messages over the 25k-char Honcho cap are truncated with a note in metadata.
 
 ## Privacy
 
