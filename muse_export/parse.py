@@ -104,10 +104,43 @@ def conversation_name_from_filename(filename: str) -> str:
     return re.sub(r"_\d{2}-\d{2}-\d{4}_\d+$", "", stem)
 
 
+def chunk_by_gap(messages: list[Message], gap_hours: float = 4.0) -> list[list[Message]]:
+    """Split a chronological message list into episodes: a gap of >= gap_hours
+    between consecutive messages starts a new chunk. The export does not
+    delineate side chats from the main chat, so this is a heuristic —
+    a side chat opened mid-flow lands in the surrounding episode.
+    """
+    from datetime import timedelta
+    gap = timedelta(hours=gap_hours)
+    chunks: list[list[Message]] = []
+    for m in messages:
+        if chunks and (m.ts - chunks[-1][-1].ts) >= gap:
+            chunks.append([])
+        elif not chunks:
+            chunks.append([])
+        chunks[-1].append(m)
+    return chunks
+
+
 def parse_export_zip(zip_path: str | Path) -> list[Conversation]:
-    """Parse every conversation .txt in the export zip. Raw exports are never mutated."""
+    """Parse every conversation .txt in the export.
+
+    Accepts the EYI Package .zip OR an unzipped export directory.
+    Raw exports are never mutated.
+    """
     convs: list[Conversation] = []
-    with zipfile.ZipFile(zip_path) as z:
+    p = Path(zip_path)
+    if p.is_dir():
+        txt_files = sorted(str(f) for f in p.glob("*.txt"))
+        for path in txt_files:
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+            convs.append(parse_conversation_text(
+                text,
+                name=conversation_name_from_filename(path),
+                source_file=Path(path).name,
+            ))
+        return convs
+    with zipfile.ZipFile(p) as z:
         txt_files = sorted(n for n in z.namelist()
                            if n.endswith(".txt") and "/" not in n)
         for name in txt_files:
