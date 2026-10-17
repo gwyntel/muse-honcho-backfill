@@ -1,3 +1,5 @@
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/gwyntel/muse-honcho-backfill)
+
 # muse-honcho-backfill
 
 Load your [Muse](https://muse.ai) agent data exports into [Honcho](https://github.com/plastic-labs/honcho) (self-hosted, by Plastic Labs) so your whole chat history becomes long-term memory — backdated to the original timestamps, one Honcho session per conversation.
